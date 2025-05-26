@@ -126,10 +126,10 @@ show_menu() {
     echo "5. 备份 Docker 卷"
     echo "6. 备份网络配置"
     echo "7. 备份 Docker 配置文件"
-    echo "8. 恢复容器状态"
-    echo "88. 恢复容器状态（无需确认）"
-    echo "9. 执行完整备份流程"
-    echo "99. 执行完整备份流程（无需确认）"
+    echo "8. 执行完整备份流程"
+    echo "88. 执行完整备份流程（无需确认）"
+    echo "9. 恢复容器状态"
+    echo "99. 恢复容器状态（无需确认）"
     echo "0. 退出"
     printf "\n%s\n" "===================================================="
     printf "\n%s" "请选择操作 (0-99): "
@@ -341,11 +341,6 @@ get_safe_volume_name() {
 # 备份 Docker 卷
 backup_volumes() {
     if confirm "是否备份所有 Docker 卷？"; then
-        # 确保 Alpine 镜像存在
-        if ! ensure_alpine_image; then
-            return 1
-        fi
-        
         echo "正在备份 Docker 卷..."
         
         # 创建卷备份目录
@@ -354,10 +349,6 @@ backup_volumes() {
         # 创建卷名映射文件
         create_volume_map
         local map_file="$BACKUP_DIR/volumes/volume_map.txt"
-        
-        # 获取备份目录的绝对路径
-        local backup_dir_abs=$(cd "$BACKUP_DIR" && pwd)
-        local volumes_dir_abs="$backup_dir_abs/volumes"
         
         # 获取所有卷
         docker volume ls --format "{{.Name}}" | while read volume; do
@@ -370,11 +361,15 @@ backup_volumes() {
                 
                 echo "备份卷: $volume (映射为: $safe_name)"
                 
-                # 使用绝对路径进行备份
-                if docker run --rm \
-                    -v "$volume:/source:ro" \
-                    -v "$volumes_dir_abs:/backup:rw" \
-                    alpine sh -c "cd /source && tar czf /backup/$safe_name.tar.gz ."; then
+                # 获取卷的挂载点
+                volume_path=$(docker volume inspect -f '{{.Mountpoint}}' "$volume")
+                if [ -z "$volume_path" ]; then
+                    echo -e "${RED}无法获取卷挂载点: $volume${NC}"
+                    continue
+                fi
+                
+                # 直接使用 tar 命令备份
+                if tar -czf "$BACKUP_DIR/volumes/$safe_name.tar.gz" -C "$volume_path" .; then
                     # 备份卷元数据
                     docker volume inspect "$volume" > "$BACKUP_DIR/volumes/$safe_name.metadata.json"
                     echo -e "${GREEN}成功备份卷: $volume${NC}"
@@ -485,40 +480,38 @@ full_backup_no_confirm() {
     
     # 备份所有卷
     echo "正在备份所有卷..."
-    if ensure_alpine_image; then
-        # 创建卷名映射文件
-        create_volume_map
-        local map_file="$BACKUP_DIR/volumes/volume_map.txt"
-        
-        # 获取备份目录的绝对路径
-        local backup_dir_abs=$(cd "$BACKUP_DIR" && pwd)
-        local volumes_dir_abs="$backup_dir_abs/volumes"
-        
-        docker volume ls --format "{{.Name}}" | while read volume; do
-            if [ ! -z "$volume" ]; then
-                # 生成安全的卷名
-                safe_name=$(get_safe_volume_name "$volume")
-                
-                # 记录卷名映射
-                echo "$volume=$safe_name" >> "$map_file"
-                
-                echo "备份卷: $volume (映射为: $safe_name)"
-                
-                # 使用绝对路径进行备份
-                if docker run --rm \
-                    -v "$volume:/source:ro" \
-                    -v "$volumes_dir_abs:/backup:rw" \
-                    alpine sh -c "cd /source && tar czf /backup/$safe_name.tar.gz ."; then
-                    # 备份卷元数据
-                    docker volume inspect "$volume" > "$BACKUP_DIR/volumes/$safe_name.metadata.json"
-                    echo -e "${GREEN}成功备份卷: $volume${NC}"
-                else
-                    echo -e "${RED}备份卷失败: $volume${NC}"
-                    continue
-                fi
+    # 创建卷名映射文件
+    create_volume_map
+    local map_file="$BACKUP_DIR/volumes/volume_map.txt"
+    
+    docker volume ls --format "{{.Name}}" | while read volume; do
+        if [ ! -z "$volume" ]; then
+            # 生成安全的卷名
+            safe_name=$(get_safe_volume_name "$volume")
+            
+            # 记录卷名映射
+            echo "$volume=$safe_name" >> "$map_file"
+            
+            echo "备份卷: $volume (映射为: $safe_name)"
+            
+            # 获取卷的挂载点
+            volume_path=$(docker volume inspect -f '{{.Mountpoint}}' "$volume")
+            if [ -z "$volume_path" ]; then
+                echo -e "${RED}无法获取卷挂载点: $volume${NC}"
+                continue
             fi
-        done
-    fi
+            
+            # 直接使用 tar 命令备份
+            if tar -czf "$BACKUP_DIR/volumes/$safe_name.tar.gz" -C "$volume_path" .; then
+                # 备份卷元数据
+                docker volume inspect "$volume" > "$BACKUP_DIR/volumes/$safe_name.metadata.json"
+                echo -e "${GREEN}成功备份卷: $volume${NC}"
+            else
+                echo -e "${RED}备份卷失败: $volume${NC}"
+                continue
+            fi
+        fi
+    done
     
     # 备份所有网络配置
     echo "正在备份所有网络配置..."
@@ -895,11 +888,6 @@ restore_volumes() {
     
     if [ ! -d "$volumes_dir" ]; then
         echo -e "${RED}错误: 备份目录中未找到卷目录${NC}"
-        return 1
-    fi
-    
-    # 确保 Alpine 镜像存在
-    if ! ensure_alpine_image; then
         return 1
     fi
     
@@ -1322,15 +1310,6 @@ restore_volumes_no_confirm() {
         return 1
     fi
     
-    # 确保 Alpine 镜像存在
-    if ! ensure_alpine_image; then
-        return 1
-    fi
-    
-    # 获取备份目录的绝对路径
-    local backup_dir_abs=$(cd "$backup_dir" && pwd)
-    local volumes_dir_abs="$backup_dir_abs/volumes"
-    
     # 检查卷名映射文件
     local map_file="$volumes_dir/volume_map.txt"
     if [ ! -f "$map_file" ]; then
@@ -1380,12 +1359,17 @@ restore_volumes_no_confirm() {
             continue
         fi
         
-        # 恢复卷数据
+        # 获取卷的挂载点
+        volume_path=$(docker volume inspect -f '{{.Mountpoint}}' "$original_name")
+        if [ -z "$volume_path" ]; then
+            echo -e "${RED}无法获取卷挂载点: $original_name${NC}"
+            docker volume rm "$original_name" 2>/dev/null
+            continue
+        fi
+        
+        # 直接使用 tar 命令恢复
         echo "恢复卷数据..."
-        if docker run --rm \
-            -v "$original_name:/target" \
-            -v "$volumes_dir_abs:/backup" \
-            alpine sh -c "cd /target && tar xzf /backup/$safe_name.tar.gz"; then
+        if tar -xzf "$vol_file" -C "$volume_path"; then
             echo -e "${GREEN}成功恢复卷: $original_name${NC}"
         else
             echo -e "${RED}恢复卷数据失败: $original_name${NC}"
@@ -1465,6 +1449,17 @@ restore_networks_no_confirm() {
 # 无需确认的容器恢复
 restore_containers_no_confirm() {
     echo "正在恢复容器配置..."
+    
+    # 首先恢复所有镜像
+    echo "正在恢复所需的镜像..."
+    for img_file in "$BACKUP_DIR/images"/*.tar.gz; do
+        if [ -f "$img_file" ]; then
+            echo "恢复镜像: $(basename "$img_file")"
+            gunzip -c "$img_file" | docker load
+        fi
+    done
+    
+    # 然后恢复容器
     for container_file in "$BACKUP_DIR/containers"/*.json; do
         # 跳过 .metadata.json 文件
         if [[ "$container_file" == *.metadata.json ]]; then
@@ -1489,6 +1484,12 @@ restore_containers_no_confirm() {
             
             # 提取容器配置
             image=$(echo "$container_config" | jq -r '.[0].Config.Image')
+            
+            # 检查镜像是否存在
+            if ! docker image inspect "$image" >/dev/null 2>&1; then
+                echo -e "${RED}错误: 镜像 $image 不存在${NC}"
+                continue
+            fi
             
             # 构建运行命令
             run_cmd="docker run -d --name $container_name"
@@ -1591,10 +1592,10 @@ if [ $# -lt 1 ]; then
     echo "  5 - 备份 Docker 卷"
     echo "  6 - 备份网络配置"
     echo "  7 - 备份 Docker 配置文件"
-    echo "  8 - 恢复容器状态"
-    echo "  88 - 恢复容器状态（无需确认）"
-    echo "  9 - 执行完整备份流程"
-    echo "  99 - 执行完整备份流程（无需确认）"
+    echo "  8 - 执行完整备份流程"
+    echo "  88 - 执行完整备份流程（无需确认）"
+    echo "  9 - 恢复容器状态"
+    echo "  99 - 恢复容器状态（无需确认）"
     exit 1
 fi
 
@@ -1673,23 +1674,23 @@ if [ ! -z "$PRESET_OPTION" ]; then
             exit $?
             ;;
         "8")
-            echo "执行完整恢复流程..."
-            full_restore "$BACKUP_DIR"
-            exit $?
-            ;;
-        "88")
-            echo "执行完整恢复流程（无需确认）..."
-            full_restore_no_confirm "$BACKUP_DIR"
-            exit $?
-            ;;
-        "9")
             echo "执行完整备份流程..."
             full_backup
             exit $?
             ;;
-        "99")
+        "88")
             echo "执行完整备份流程（无需确认）..."
             full_backup_no_confirm
+            exit $?
+            ;;
+        "9")
+            echo "恢复容器状态..."
+            restore_containers "$BACKUP_DIR"
+            exit $?
+            ;;
+        "99")
+            echo "恢复容器状态（无需确认）..."
+            restore_containers_no_confirm "$BACKUP_DIR"
             exit $?
             ;;
         *)
@@ -1702,10 +1703,10 @@ if [ ! -z "$PRESET_OPTION" ]; then
             echo "  5 - 备份 Docker 卷"
             echo "  6 - 备份网络配置"
             echo "  7 - 备份 Docker 配置文件"
-            echo "  8 - 恢复容器状态"
-            echo "  88 - 恢复容器状态（无需确认）"
-            echo "  9 - 执行完整备份流程"
-            echo "  99 - 执行完整备份流程（无需确认）"
+            echo "  8 - 执行完整备份流程"
+            echo "  88 - 执行完整备份流程（无需确认）"
+            echo "  9 - 恢复容器状态"
+            echo "  99 - 恢复容器状态（无需确认）"
             exit 1
             ;;
     esac
