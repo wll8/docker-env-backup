@@ -1,0 +1,28 @@
+version: '3'
+
+services:
+  test-web:
+    build: .
+    container_name: test_web
+    ports:
+      - "8080:9090"
+    volumes:
+      - ./cfg:/app/cfg
+    command: ["node", "server.js", "--config", "config.json"]
+
+  test-web2:
+    build: .
+    container_name: test_web2
+    ports:
+      - "8081:9090"
+    volumes:
+      - ./cfg:/app/cfg
+    command: ["node", "server.js", "--config", "config2.json"]
+
+volumes:
+  web_data:
+  db_data:
+
+networks:
+  test_net:
+    driver: bridge
