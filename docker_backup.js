@@ -770,6 +770,9 @@ async function performFullRestore() {
 
     console.log(chalk.blue('开始完整恢复...'));
 
+    // 确保 Alpine 镜像存在
+    await ensureAlpineImage();
+
     // 先恢复镜像
     await restoreImages();
 
