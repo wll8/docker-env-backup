@@ -168,9 +168,37 @@ async function backupConfig() {
   }
 }
 
+// 确保 Alpine 镜像存在
+async function ensureAlpineImage() {
+  try {
+    try {
+      await docker.getImage('alpine:latest').inspect();
+      console.log(chalk.green('Alpine 镜像已存在'));
+    } catch (error) {
+      if (error.statusCode === 404) {
+        console.log(chalk.blue('正在拉取 Alpine 镜像...'));
+        await docker.pull('alpine:latest');
+        console.log(chalk.green('Alpine 镜像拉取成功'));
+      } else {
+        throw error;
+      }
+    }
+  } catch (error) {
+    console.error(chalk.red(`确保 Alpine 镜像存在失败: ${error.message}`));
+    throw error;
+  }
+}
+
 // 备份卷
 async function backupVolume(volumeName) {
   try {
+    // 确保备份目录存在
+    const volumesDir = path.join(BACKUP_DIR, 'volumes');
+    fs.ensureDirSync(volumesDir);
+
+    // 确保 Alpine 镜像存在
+    await ensureAlpineImage();
+
     const volume = docker.getVolume(volumeName);
     const volumeInfo = await volume.inspect();
 
@@ -192,7 +220,7 @@ async function backupVolume(volumeName) {
     });
 
     // 保存卷数据到 volumes 目录
-    const volumeTarPath = path.join(BACKUP_DIR, 'volumes', `${volumeInfo.Name}.tar`);
+    const volumeTarPath = path.join(volumesDir, `${volumeInfo.Name}.tar`);
     const writeStream = fs.createWriteStream(volumeTarPath);
 
     await new Promise((resolve, reject) => {
@@ -202,11 +230,11 @@ async function backupVolume(volumeName) {
     });
 
     // 保存卷配置
-    const volumeConfigPath = path.join(BACKUP_DIR, 'volumes', `${volumeInfo.Name}.json`);
+    const volumeConfigPath = path.join(volumesDir, `${volumeInfo.Name}.json`);
     await fs.writeJson(volumeConfigPath, volumeInfo, { spaces: 2 });
 
     // 创建卷内容的文件系统备份
-    const volumeFsPath = path.join(BACKUP_DIR, 'fs', 'volumes', volumeInfo.Name);
+    const volumeFsPath = path.join(volumesDir, 'fs', 'volumes', volumeInfo.Name);
     fs.ensureDirSync(volumeFsPath);
 
     // 从 tar 文件中提取内容到文件系统，保持所有属性
@@ -407,6 +435,9 @@ async function performFullBackup() {
 // 恢复卷
 async function restoreVolume(volumeName) {
   try {
+    // 确保 Alpine 镜像存在
+    await ensureAlpineImage();
+
     const volumeConfigPath = path.join(BACKUP_DIR, 'volumes', `${volumeName}.json`);
     const volumeTarPath = path.join(BACKUP_DIR, 'volumes', `${volumeName}.tar`);
     const volumeFsPath = path.join(BACKUP_DIR, 'fs', 'volumes', volumeName);
