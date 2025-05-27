@@ -117,14 +117,24 @@ async function backupImages(specificImages = null) {
 }
 
 // 备份 Docker 网络
-async function backupNetworks() {
+async function backupNetworks(specificNetworks = null) {
   try {
-    const networks = await docker.listNetworks();
+    const networks = specificNetworks || await docker.listNetworks();
     const networksDir = path.join(BACKUP_DIR, 'networks');
     fs.ensureDirSync(networksDir);
 
     console.log(chalk.blue(`找到 ${networks.length} 个网络`));
     for (const network of networks) {
+      // 跳过默认网络
+      if (network.Name === 'bridge' || 
+          network.Name === 'host' || 
+          network.Name === 'none' ||
+          network.Name.startsWith('docker-') ||
+          network.Name.startsWith('com.docker.')) {
+        console.log(chalk.yellow(`跳过默认网络: ${network.Name}`));
+        continue;
+      }
+
       console.log(chalk.blue(`正在备份网络: ${network.Name}`));
       await fs.writeJson(
         path.join(networksDir, `${network.Name}.json`),
@@ -860,11 +870,37 @@ async function backupImageAndContainers(imageName) {
     const relatedContainers = await findContainersByImage(targetImage.Id);
     console.log(chalk.blue(`找到 ${relatedContainers.length} 个使用该镜像的容器`));
 
+    // 收集所有相关容器使用的网络
+    const relatedNetworks = new Set();
     for (const container of relatedContainers) {
       const containerName = container.Names[0].replace('/', '');
       console.log(chalk.blue(`正在备份容器: ${containerName}`));
       await backupContainer(container.Id);
+      
+      // 获取容器详细信息以收集网络信息
+      const containerInfo = await docker.getContainer(container.Id).inspect();
+      if (containerInfo.NetworkSettings && containerInfo.NetworkSettings.Networks) {
+        Object.keys(containerInfo.NetworkSettings.Networks).forEach(networkName => {
+          // 跳过默认网络
+          if (!['bridge', 'host', 'none'].includes(networkName) && 
+              !networkName.startsWith('docker-') && 
+              !networkName.startsWith('com.docker.')) {
+            relatedNetworks.add(networkName);
+          }
+        });
+      }
     }
+
+    // 备份相关网络
+    if (relatedNetworks.size > 0) {
+      console.log(chalk.blue(`正在备份 ${relatedNetworks.size} 个相关网络...`));
+      const networks = await docker.listNetworks();
+      const networksToBackup = networks.filter(network => relatedNetworks.has(network.Name));
+      await backupNetworks(networksToBackup);
+    }
+
+    // 备份 Docker 配置
+    await backupConfig();
 
     // 验证备份
     await verifyBackup();
