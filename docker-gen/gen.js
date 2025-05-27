@@ -7,7 +7,8 @@ const chalk = require('chalk');
 const { execSync } = require('child_process');
 
 const docker = new Docker();
-const TEST_ENV_DIR = path.join(process.cwd(), 'test_docker_env');
+const TEST_ENV_DIR = `${__dirname}/`
+const TEST_PREFIX = 'test_bk_';  // 添加测试资源前缀常量
 
 // 清理测试环境
 async function cleanupTestEnvironment() {
@@ -19,7 +20,7 @@ async function cleanupTestEnvironment() {
     const containers = await docker.listContainers({ all: true });
     for (const containerInfo of containers) {
       const name = containerInfo.Names[0].replace('/', '');
-      if (name === 'test_web' || name === 'test_web2') {
+      if (name.startsWith(TEST_PREFIX)) {
         const container = docker.getContainer(containerInfo.Id);
         try {
           // 尝试停止容器
@@ -51,12 +52,27 @@ async function cleanupTestEnvironment() {
     const images = await docker.listImages();
     for (const imageInfo of images) {
       const tags = imageInfo.RepoTags || [];
-      if (tags.some(tag => tag.includes('test_docker_env_test-web'))) {
+      if (tags.some(tag => tag.includes(TEST_PREFIX))) {
         try {
           await docker.getImage(imageInfo.Id).remove({ force: true });
           console.log(chalk.green(`镜像 ${tags[0]} 已删除`));
         } catch (error) {
           console.log(chalk.yellow(`删除镜像 ${tags[0]} 失败: ${error.message}`));
+        }
+      }
+    }
+
+    // 清理相关网络
+    console.log(chalk.blue('清理测试网络...'));
+    const networks = await docker.listNetworks();
+    for (const networkInfo of networks) {
+      if (networkInfo.Name.startsWith(TEST_PREFIX)) {
+        try {
+          const network = docker.getNetwork(networkInfo.Id);
+          await network.remove();
+          console.log(chalk.green(`网络 ${networkInfo.Name} 已删除`));
+        } catch (error) {
+          console.log(chalk.yellow(`删除网络 ${networkInfo.Name} 失败: ${error.message}`));
         }
       }
     }
@@ -82,8 +98,6 @@ async function createTestEnvironment() {
     // 使用 docker-compose 启动服务
     console.log(chalk.blue('启动 docker-compose 服务...'));
     execSync('docker-compose up -d --build', { stdio: 'inherit' });
-
-    console.log(chalk.green('\n测试环境已启动，访问：http://127.0.0.1:8080/api/config'));
 
     // 等待服务启动
     console.log(chalk.blue('等待服务启动...'));

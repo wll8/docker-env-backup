@@ -4,7 +4,7 @@
   "main": "index.js",
   "scripts": {
     "test": "npx shx rm -rf backups && npm run del && npm run gen && npm run back && npm run del && npm run get",
-    "gen": "node create_test_env.js",
+    "gen": "node docker-gen/gen.js",
     "del": "node cleanup_docker",
     "get": "node docker_backup.js restore",
     "back": "node docker_backup.js backup",

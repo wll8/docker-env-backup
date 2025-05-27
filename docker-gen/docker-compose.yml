@@ -1,0 +1,58 @@
+services:
+  web1:
+    build: .
+    environment:
+      - NAME=web1
+      - WEB2_URL=http://test_bk_container_web_2:9090
+    image: test_bk_image_web
+    container_name: test_bk_container_web_1
+    ports:
+      - "8081:9090"
+    volumes:
+      - ./file1:/app/file
+    command: ["node", "server.js"]
+    networks:
+      - test_bk_web_net
+    pull_policy: build
+
+  web2:
+    environment:
+      - NAME=web2
+      - WEB1_URL=http://test_bk_container_web_1:9090
+    image: test_bk_image_web
+    container_name: test_bk_container_web_2
+    ports:
+      - "8082:9090"
+    volumes:
+      - ./file2:/app/file
+    command: ["node", "server.js"]
+    networks:
+      - test_bk_web_net
+    pull_policy: never
+
+  arg1:
+    build: .
+    environment:
+      - NAME=web2
+    image: test_bk_image_arg
+    container_name: test_bk_container_arg_1
+    ports:
+      - "8083:9090"
+    volumes:
+      - ./file3:/app/file
+    command: ["node", "server.js", "arg1", "arg2", "arg3"]
+    networks:
+      - test_bk_arg_net
+    pull_policy: never
+
+volumes:
+  test_bk_web_data:
+  test_bk_db_data:
+
+networks:
+  test_bk_web_net:
+    driver: bridge
+    name: test_bk_web_net
+  test_bk_arg_net:
+    driver: bridge
+    name: test_bk_arg_net

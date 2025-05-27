@@ -331,7 +331,6 @@ async function performFullBackup() {
     // 创建文件系统备份目录
     const fsBackupDir = path.join(BACKUP_DIR, 'fs');
     fs.ensureDirSync(path.join(fsBackupDir, 'volumes'));
-    fs.ensureDirSync(path.join(fsBackupDir, 'containers'));
     fs.ensureDirSync(path.join(fsBackupDir, 'binds'));
 
     // 备份镜像
