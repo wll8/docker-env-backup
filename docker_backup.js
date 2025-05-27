@@ -61,9 +61,9 @@ async function verifyBackup() {
 }
 
 // 备份 Docker 镜像
-async function backupImages() {
+async function backupImages(specificImages = null) {
   try {
-    const images = await docker.listImages();
+    const images = specificImages || await docker.listImages();
     const imagesDir = path.join(BACKUP_DIR, 'images');
     fs.ensureDirSync(imagesDir);
 
@@ -734,6 +734,83 @@ async function listBackups() {
   }
 }
 
+// 查找使用特定镜像的容器
+async function findContainersByImage(imageId) {
+  try {
+    const containers = await docker.listContainers({ all: true });
+    return containers.filter(container => container.ImageID === imageId);
+  } catch (error) {
+    console.error(chalk.red(`查找容器失败: ${error.message}`));
+    throw error;
+  }
+}
+
+// 通过名称查找镜像
+async function findImageByName(imageName) {
+  try {
+    const images = await docker.listImages();
+    // 尝试完全匹配
+    let image = images.find(img => 
+      img.RepoTags && img.RepoTags.includes(imageName)
+    );
+    
+    // 如果没有完全匹配，尝试部分匹配
+    if (!image) {
+      image = images.find(img => 
+        img.RepoTags && img.RepoTags.some(tag => tag.includes(imageName))
+      );
+    }
+    
+    return image;
+  } catch (error) {
+    console.error(chalk.red(`查找镜像失败: ${error.message}`));
+    throw error;
+  }
+}
+
+// 备份特定镜像及其容器
+async function backupImageAndContainers(imageName) {
+  try {
+    console.log(chalk.blue(`开始查找镜像: ${imageName}`));
+    
+    // 通过名称查找镜像
+    const targetImage = await findImageByName(imageName);
+    
+    if (!targetImage) {
+      throw new Error(`未找到镜像: ${imageName}`);
+    }
+
+    console.log(chalk.blue(`找到镜像: ${targetImage.RepoTags.join(', ')}`));
+    console.log(chalk.blue(`开始备份镜像 ${targetImage.Id} 及其相关容器...`));
+
+    // 创建文件系统备份目录
+    const fsBackupDir = path.join(BACKUP_DIR, 'fs');
+    fs.ensureDirSync(path.join(fsBackupDir, 'volumes'));
+    fs.ensureDirSync(path.join(fsBackupDir, 'binds'));
+
+    // 使用现有的备份镜像函数
+    await backupImages([targetImage]);
+
+    // 查找并备份相关容器
+    const relatedContainers = await findContainersByImage(targetImage.Id);
+    console.log(chalk.blue(`找到 ${relatedContainers.length} 个使用该镜像的容器`));
+
+    for (const container of relatedContainers) {
+      const containerName = container.Names[0].replace('/', '');
+      console.log(chalk.blue(`正在备份容器: ${containerName}`));
+      await backupContainer(container.Id);
+    }
+
+    // 验证备份
+    await verifyBackup();
+
+    console.log(chalk.green(`镜像 ${targetImage.RepoTags.join(', ')} 及其相关容器的备份已完成`));
+  } catch (error) {
+    console.error(chalk.red(`备份失败: ${error.message}`));
+    throw error;
+  }
+}
+
 // 命令行接口
 program
   .version('1.0.0')
@@ -753,5 +830,10 @@ program
   .command('list')
   .description('列出备份内容')
   .action(listBackups);
+
+program
+  .command('backup-image <imageName>')
+  .description('备份特定镜像及其相关容器（支持镜像名称或标签，例如：nginx:latest）')
+  .action(backupImageAndContainers);
 
 program.parse(process.argv);
