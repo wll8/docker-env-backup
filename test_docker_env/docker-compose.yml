@@ -5,8 +5,8 @@ services:
     ports:
       - "8080:9090"
     volumes:
-      - ./cfg:/app/cfg
-    command: ["node", "server.js", "--config", "config.json"]
+      - ./file1:/app/file
+    command: ["node", "server.js"]
 
   test-web2:
     build: .
@@ -14,8 +14,8 @@ services:
     ports:
       - "8081:9090"
     volumes:
-      - ./cfg:/app/cfg
-    command: ["node", "server.js", "--config", "config2.json"]
+      - ./file2:/app/file
+    command: ["node", "server.js"]
 
 volumes:
   web_data:
