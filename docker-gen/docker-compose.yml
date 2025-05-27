@@ -30,16 +30,23 @@ services:
       - test_bk_web_net
     pull_policy: never
 
-  arg1:
-    build: .
-    environment:
-      - NAME=web2
-    image: test_bk_image_arg
-    container_name: test_bk_container_arg_1
+  web3:
+    image: test_bk_image_web
+    container_name: test_bk_container_web_3
     ports:
       - "8083:9090"
     volumes:
-      - ./file3:/app/file
+      # 映射文件而不是目录
+      - ./log.txt:/app/log/req.txt
+    command: ["node", "server.js"]
+    networks:
+      - test_bk_web_net
+    pull_policy: never
+
+  arg1:
+    build: .
+    image: test_bk_image_arg
+    container_name: test_bk_container_arg_1
     command: ["node", "server.js", "arg1", "arg2", "arg3"]
     networks:
       - test_bk_arg_net
