@@ -199,10 +199,14 @@ async function backupVolume(volumeName) {
     const volumeFsPath = path.join(BACKUP_DIR, 'fs', 'volumes', volumeInfo.Name);
     fs.ensureDirSync(volumeFsPath);
 
-    // 从 tar 文件中提取内容到文件系统
+    // 从 tar 文件中提取内容到文件系统，保持所有属性
     await new Promise((resolve, reject) => {
       const extractStream = tar.extract({
         cwd: volumeFsPath,
+        preservePaths: true,
+        preserveOwner: true,
+        preserveMode: true,
+        preserveTimestamps: true,
         strict: true
       });
       fs.createReadStream(volumeTarPath)
@@ -250,22 +254,6 @@ async function backupContainer(containerId) {
         .on('error', reject);
     });
 
-    // 创建容器内容的文件系统备份
-    const containerFsPath = path.join(BACKUP_DIR, 'fs', 'containers', containerId);
-    fs.ensureDirSync(containerFsPath);
-
-    // 从 tar 文件中提取内容到文件系统
-    await new Promise((resolve, reject) => {
-      const extractStream = tar.extract({
-        cwd: containerFsPath,
-        strict: true
-      });
-      fs.createReadStream(tarPath)
-        .pipe(extractStream)
-        .on('finish', resolve)
-        .on('error', reject);
-    });
-
     // 备份所有关联的卷
     const volumes = containerInfo.Mounts
       .filter(mount => mount.Type === 'volume')
@@ -289,17 +277,27 @@ async function backupContainer(containerId) {
         const [hostPath, containerPath] = bind.split(':');
         if (fs.existsSync(hostPath)) {
           const bindBackupPath = path.join(bindFsPath, path.basename(hostPath));
-          if (fs.lstatSync(hostPath).isDirectory()) {
-            await fs.copy(hostPath, bindBackupPath);
-          } else {
-            await fs.copyFile(hostPath, bindBackupPath);
-          }
+          
+          // 使用 tar 备份文件映射，保持所有属性
+          await tar.create(
+            {
+              gzip: false,
+              file: `${bindBackupPath}.tar`,
+              preservePaths: true,
+              preserveOwner: true,
+              preserveMode: true,
+              preserveTimestamps: true,
+              cwd: path.dirname(hostPath)
+            },
+            [path.basename(hostPath)]
+          );
+          
           console.log(chalk.blue(`已备份文件映射: ${hostPath} -> ${containerPath}`));
         }
       }
     }
 
-    console.log(chalk.green(`容器 ${containerId} 已成功备份到文件系统`));
+    console.log(chalk.green(`容器 ${containerId} 已成功备份`));
   } catch (error) {
     console.error(chalk.red(`备份失败: ${error.message}`));
     throw error;
@@ -394,12 +392,16 @@ async function restoreVolume(volumeName) {
     // 如果存在文件系统备份，优先使用文件系统备份
     if (fs.existsSync(volumeFsPath)) {
       console.log(chalk.blue(`正在从文件系统恢复卷 ${volumeName} 的内容...`));
-      // 创建临时 tar 文件
+      // 创建临时 tar 文件，保持所有属性
       const tempTarPath = path.join(BACKUP_DIR, 'volumes', `${volumeName}-temp.tar`);
       await tar.create(
         {
           gzip: false,
           file: tempTarPath,
+          preservePaths: true,
+          preserveOwner: true,
+          preserveMode: true,
+          preserveTimestamps: true,
           cwd: volumeFsPath
         },
         ['.']
@@ -438,7 +440,6 @@ async function restoreContainer(containerId) {
   try {
     const configPath = path.join(BACKUP_DIR, 'containers', `${containerId}.json`);
     const tarPath = path.join(BACKUP_DIR, 'containers', `${containerId}.tar`);
-    const containerFsPath = path.join(BACKUP_DIR, 'fs', 'containers', containerId);
     const bindFsPath = path.join(BACKUP_DIR, 'fs', 'binds', containerId);
 
     // 检查备份文件是否存在
@@ -507,54 +508,37 @@ async function restoreContainer(containerId) {
     console.log(chalk.blue('正在创建容器...'));
     const container = await docker.createContainer(containerConfig);
 
-    // 如果存在文件系统备份，优先使用文件系统备份
-    if (fs.existsSync(containerFsPath)) {
-      console.log(chalk.blue('正在从文件系统恢复容器内容...'));
-      // 创建临时 tar 文件
-      const tempTarPath = path.join(BACKUP_DIR, 'containers', `${containerId}-temp.tar`);
-      await tar.create(
-        {
-          gzip: false,
-          file: tempTarPath,
-          cwd: containerFsPath
-        },
-        ['.']
-      );
-
-      // 导入容器文件系统
-      const tarStream = fs.createReadStream(tempTarPath);
-      await container.putArchive(tarStream, {
-        path: '/'
-      });
-
-      // 清理临时文件
-      await fs.remove(tempTarPath);
-    } else {
-      // 使用原始 tar 文件
-      console.log(chalk.blue('正在从 tar 文件恢复容器内容...'));
-      const tarStream = fs.createReadStream(tarPath);
-      await container.putArchive(tarStream, {
-        path: '/'
-      });
-    }
+    // 导入容器文件系统
+    console.log(chalk.blue('正在导入容器文件系统...'));
+    const tarStream = fs.createReadStream(tarPath);
+    await container.putArchive(tarStream, {
+      path: '/'
+    });
 
     // 恢复文件映射
     if (fs.existsSync(bindFsPath)) {
       console.log(chalk.blue('正在恢复文件映射...'));
       const bindFiles = await fs.readdir(bindFsPath);
       for (const bindFile of bindFiles) {
-        const bindSourcePath = path.join(bindFsPath, bindFile);
-        const bindTargetPath = containerInfo.HostConfig.Binds
-          .find(bind => bind.split(':')[0].endsWith(bindFile))
-          ?.split(':')[0];
+        if (bindFile.endsWith('.tar')) {
+          const bindSourcePath = path.join(bindFsPath, bindFile);
+          const bindTargetPath = containerInfo.HostConfig.Binds
+            .find(bind => bind.split(':')[0].endsWith(bindFile.replace('.tar', '')))
+            ?.split(':')[0];
 
-        if (bindTargetPath) {
-          if (fs.lstatSync(bindSourcePath).isDirectory()) {
-            await fs.copy(bindSourcePath, bindTargetPath);
-          } else {
-            await fs.copyFile(bindSourcePath, bindTargetPath);
+          if (bindTargetPath) {
+            // 从 tar 文件恢复，保持所有属性
+            await tar.extract({
+              file: bindSourcePath,
+              cwd: path.dirname(bindTargetPath),
+              preservePaths: true,
+              preserveOwner: true,
+              preserveMode: true,
+              preserveTimestamps: true,
+              strict: true
+            });
+            console.log(chalk.blue(`已恢复文件映射: ${bindSourcePath} -> ${bindTargetPath}`));
           }
-          console.log(chalk.blue(`已恢复文件映射: ${bindSourcePath} -> ${bindTargetPath}`));
         }
       }
     }
