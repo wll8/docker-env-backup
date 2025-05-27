@@ -181,6 +181,7 @@ async function backupVolume(volumeName) {
       path: '/volume-data'
     });
 
+    // 保存卷数据到 volumes 目录
     const volumeTarPath = path.join(BACKUP_DIR, 'volumes', `${volumeInfo.Name}.tar`);
     const writeStream = fs.createWriteStream(volumeTarPath);
 
@@ -194,11 +195,27 @@ async function backupVolume(volumeName) {
     const volumeConfigPath = path.join(BACKUP_DIR, 'volumes', `${volumeInfo.Name}.json`);
     await fs.writeJson(volumeConfigPath, volumeInfo, { spaces: 2 });
 
+    // 创建卷内容的文件系统备份
+    const volumeFsPath = path.join(BACKUP_DIR, 'fs', 'volumes', volumeInfo.Name);
+    fs.ensureDirSync(volumeFsPath);
+
+    // 从 tar 文件中提取内容到文件系统
+    await new Promise((resolve, reject) => {
+      const extractStream = tar.extract({
+        cwd: volumeFsPath,
+        strict: true
+      });
+      fs.createReadStream(volumeTarPath)
+        .pipe(extractStream)
+        .on('finish', resolve)
+        .on('error', reject);
+    });
+
     // 清理临时容器
     await tempContainer.stop();
     await tempContainer.remove();
 
-    console.log(chalk.green(`卷 ${volumeName} 已成功备份`));
+    console.log(chalk.green(`卷 ${volumeName} 已成功备份到文件系统`));
   } catch (error) {
     console.error(chalk.red(`备份卷 ${volumeName} 失败: ${error.message}`));
     throw error;
@@ -233,6 +250,22 @@ async function backupContainer(containerId) {
         .on('error', reject);
     });
 
+    // 创建容器内容的文件系统备份
+    const containerFsPath = path.join(BACKUP_DIR, 'fs', 'containers', containerId);
+    fs.ensureDirSync(containerFsPath);
+
+    // 从 tar 文件中提取内容到文件系统
+    await new Promise((resolve, reject) => {
+      const extractStream = tar.extract({
+        cwd: containerFsPath,
+        strict: true
+      });
+      fs.createReadStream(tarPath)
+        .pipe(extractStream)
+        .on('finish', resolve)
+        .on('error', reject);
+    });
+
     // 备份所有关联的卷
     const volumes = containerInfo.Mounts
       .filter(mount => mount.Type === 'volume')
@@ -245,7 +278,28 @@ async function backupContainer(containerId) {
       }
     }
 
-    console.log(chalk.green(`容器 ${containerId} 已成功备份`));
+    // 备份文件映射
+    const binds = containerInfo.HostConfig?.Binds || [];
+    if (binds.length > 0) {
+      console.log(chalk.blue(`正在备份 ${binds.length} 个文件映射...`));
+      const bindFsPath = path.join(BACKUP_DIR, 'fs', 'binds', containerId);
+      fs.ensureDirSync(bindFsPath);
+
+      for (const bind of binds) {
+        const [hostPath, containerPath] = bind.split(':');
+        if (fs.existsSync(hostPath)) {
+          const bindBackupPath = path.join(bindFsPath, path.basename(hostPath));
+          if (fs.lstatSync(hostPath).isDirectory()) {
+            await fs.copy(hostPath, bindBackupPath);
+          } else {
+            await fs.copyFile(hostPath, bindBackupPath);
+          }
+          console.log(chalk.blue(`已备份文件映射: ${hostPath} -> ${containerPath}`));
+        }
+      }
+    }
+
+    console.log(chalk.green(`容器 ${containerId} 已成功备份到文件系统`));
   } catch (error) {
     console.error(chalk.red(`备份失败: ${error.message}`));
     throw error;
@@ -276,6 +330,12 @@ async function performFullBackup() {
   try {
     console.log(chalk.blue('开始完整备份...'));
 
+    // 创建文件系统备份目录
+    const fsBackupDir = path.join(BACKUP_DIR, 'fs');
+    fs.ensureDirSync(path.join(fsBackupDir, 'volumes'));
+    fs.ensureDirSync(path.join(fsBackupDir, 'containers'));
+    fs.ensureDirSync(path.join(fsBackupDir, 'binds'));
+
     // 备份镜像
     await backupImages();
 
@@ -303,6 +363,7 @@ async function restoreVolume(volumeName) {
   try {
     const volumeConfigPath = path.join(BACKUP_DIR, 'volumes', `${volumeName}.json`);
     const volumeTarPath = path.join(BACKUP_DIR, 'volumes', `${volumeName}.tar`);
+    const volumeFsPath = path.join(BACKUP_DIR, 'fs', 'volumes', volumeName);
 
     if (!fs.existsSync(volumeConfigPath) || !fs.existsSync(volumeTarPath)) {
       throw new Error(`卷 ${volumeName} 的备份文件不完整`);
@@ -313,9 +374,9 @@ async function restoreVolume(volumeName) {
     // 创建新卷
     const volume = await docker.createVolume({
       Name: volumeName,
-      Driver: volumeConfig.driver,
-      Labels: volumeConfig.labels,
-      DriverOpts: volumeConfig.options
+      Driver: volumeConfig.Driver,
+      Labels: volumeConfig.Labels,
+      DriverOpts: volumeConfig.Options
     });
 
     // 创建临时容器来恢复卷数据
@@ -330,11 +391,36 @@ async function restoreVolume(volumeName) {
 
     await tempContainer.start();
 
-    // 导入卷数据
-    const tarStream = fs.createReadStream(volumeTarPath);
-    await tempContainer.putArchive(tarStream, {
-      path: '/'
-    });
+    // 如果存在文件系统备份，优先使用文件系统备份
+    if (fs.existsSync(volumeFsPath)) {
+      console.log(chalk.blue(`正在从文件系统恢复卷 ${volumeName} 的内容...`));
+      // 创建临时 tar 文件
+      const tempTarPath = path.join(BACKUP_DIR, 'volumes', `${volumeName}-temp.tar`);
+      await tar.create(
+        {
+          gzip: false,
+          file: tempTarPath,
+          cwd: volumeFsPath
+        },
+        ['.']
+      );
+
+      // 导入卷数据
+      const tarStream = fs.createReadStream(tempTarPath);
+      await tempContainer.putArchive(tarStream, {
+        path: '/'
+      });
+
+      // 清理临时文件
+      await fs.remove(tempTarPath);
+    } else {
+      // 使用原始 tar 文件
+      console.log(chalk.blue(`正在从 tar 文件恢复卷 ${volumeName} 的内容...`));
+      const tarStream = fs.createReadStream(volumeTarPath);
+      await tempContainer.putArchive(tarStream, {
+        path: '/'
+      });
+    }
 
     // 清理临时容器
     await tempContainer.stop();
@@ -352,6 +438,8 @@ async function restoreContainer(containerId) {
   try {
     const configPath = path.join(BACKUP_DIR, 'containers', `${containerId}.json`);
     const tarPath = path.join(BACKUP_DIR, 'containers', `${containerId}.tar`);
+    const containerFsPath = path.join(BACKUP_DIR, 'fs', 'containers', containerId);
+    const bindFsPath = path.join(BACKUP_DIR, 'fs', 'binds', containerId);
 
     // 检查备份文件是否存在
     if (!fs.existsSync(configPath) || !fs.existsSync(tarPath)) {
@@ -419,12 +507,57 @@ async function restoreContainer(containerId) {
     console.log(chalk.blue('正在创建容器...'));
     const container = await docker.createContainer(containerConfig);
 
-    // 导入容器文件系统
-    console.log(chalk.blue('正在导入容器文件系统...'));
-    const tarStream = fs.createReadStream(tarPath);
-    await container.putArchive(tarStream, {
-      path: '/'
-    });
+    // 如果存在文件系统备份，优先使用文件系统备份
+    if (fs.existsSync(containerFsPath)) {
+      console.log(chalk.blue('正在从文件系统恢复容器内容...'));
+      // 创建临时 tar 文件
+      const tempTarPath = path.join(BACKUP_DIR, 'containers', `${containerId}-temp.tar`);
+      await tar.create(
+        {
+          gzip: false,
+          file: tempTarPath,
+          cwd: containerFsPath
+        },
+        ['.']
+      );
+
+      // 导入容器文件系统
+      const tarStream = fs.createReadStream(tempTarPath);
+      await container.putArchive(tarStream, {
+        path: '/'
+      });
+
+      // 清理临时文件
+      await fs.remove(tempTarPath);
+    } else {
+      // 使用原始 tar 文件
+      console.log(chalk.blue('正在从 tar 文件恢复容器内容...'));
+      const tarStream = fs.createReadStream(tarPath);
+      await container.putArchive(tarStream, {
+        path: '/'
+      });
+    }
+
+    // 恢复文件映射
+    if (fs.existsSync(bindFsPath)) {
+      console.log(chalk.blue('正在恢复文件映射...'));
+      const bindFiles = await fs.readdir(bindFsPath);
+      for (const bindFile of bindFiles) {
+        const bindSourcePath = path.join(bindFsPath, bindFile);
+        const bindTargetPath = containerInfo.HostConfig.Binds
+          .find(bind => bind.split(':')[0].endsWith(bindFile))
+          ?.split(':')[0];
+
+        if (bindTargetPath) {
+          if (fs.lstatSync(bindSourcePath).isDirectory()) {
+            await fs.copy(bindSourcePath, bindTargetPath);
+          } else {
+            await fs.copyFile(bindSourcePath, bindTargetPath);
+          }
+          console.log(chalk.blue(`已恢复文件映射: ${bindSourcePath} -> ${bindTargetPath}`));
+        }
+      }
+    }
 
     // 启动容器
     console.log(chalk.blue('正在启动容器...'));
