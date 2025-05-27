@@ -273,26 +273,65 @@ async function backupContainer(containerId) {
       const bindFsPath = path.join(BACKUP_DIR, 'fs', 'binds', containerId);
       fs.ensureDirSync(bindFsPath);
 
+      // 用于跟踪已备份的文件名，避免冲突
+      const backupNames = new Map();
+
       for (const bind of binds) {
         const [hostPath, containerPath] = bind.split(':');
         if (fs.existsSync(hostPath)) {
-          const bindBackupPath = path.join(bindFsPath, path.basename(hostPath));
+          const stats = await fs.stat(hostPath);
+          const originalName = path.basename(hostPath);
           
-          // 使用 tar 备份文件映射，保持所有属性
-          await tar.create(
+          // 生成唯一的备份文件名
+          let backupName = originalName;
+          let counter = 1;
+          while (backupNames.has(backupName)) {
+            const ext = path.extname(originalName);
+            const base = path.basename(originalName, ext);
+            backupName = `${base}_${counter}${ext}`;
+            counter++;
+          }
+          backupNames.set(backupName, true);
+
+          const bindBackupPath = path.join(bindFsPath, backupName);
+          
+          // 保存文件/目录的元数据
+          await fs.writeJson(
+            `${bindBackupPath}.metadata.json`,
             {
-              gzip: false,
-              file: `${bindBackupPath}.tar`,
-              preservePaths: true,
-              preserveOwner: true,
-              preserveMode: true,
-              preserveTimestamps: true,
-              cwd: path.dirname(hostPath)
+              isFile: stats.isFile(),
+              isDirectory: stats.isDirectory(),
+              mode: stats.mode,
+              uid: stats.uid,
+              gid: stats.gid,
+              mtime: stats.mtime,
+              containerPath: containerPath,
+              hostPath: hostPath,
+              originalName: originalName
             },
-            [path.basename(hostPath)]
+            { spaces: 2 }
           );
-          
-          console.log(chalk.blue(`已备份文件映射: ${hostPath} -> ${containerPath}`));
+
+          if (stats.isFile()) {
+            // 如果是文件，直接复制并保持原始扩展名
+            await fs.copy(hostPath, bindBackupPath);
+            console.log(chalk.blue(`已备份文件映射: ${hostPath} -> ${containerPath}`));
+          } else if (stats.isDirectory()) {
+            // 如果是目录，使用 tar 备份
+            await tar.create(
+              {
+                gzip: false,
+                file: `${bindBackupPath}.tar`,
+                preservePaths: true,
+                preserveOwner: true,
+                preserveMode: true,
+                preserveTimestamps: true,
+                cwd: path.dirname(hostPath)
+              },
+              [path.basename(hostPath)]
+            );
+            console.log(chalk.blue(`已备份目录映射: ${hostPath} -> ${containerPath}`));
+          }
         }
       }
     }
@@ -457,8 +496,22 @@ async function restoreContainer(containerId) {
       const existingContainer = docker.getContainer(containerInfo.Name.replace('/', ''));
       const existingInfo = await existingContainer.inspect();
       console.log(chalk.yellow(`发现同名容器 ${containerInfo.Name}，正在删除...`));
-      await existingContainer.stop();
-      await existingContainer.remove();
+      
+      // 无论容器状态如何，都尝试停止和删除
+      try {
+        await existingContainer.stop();
+      } catch (stopError) {
+        // 忽略停止错误，继续尝试删除
+        console.log(chalk.yellow(`容器 ${containerInfo.Name} 可能已经停止`));
+      }
+      
+      try {
+        await existingContainer.remove({ force: true });
+      } catch (removeError) {
+        // 如果删除失败，抛出错误
+        throw new Error(`无法删除容器 ${containerInfo.Name}: ${removeError.message}`);
+      }
+      
       console.log(chalk.green(`已删除同名容器 ${containerInfo.Name}`));
     } catch (error) {
       if (error.statusCode !== 404) {
@@ -503,6 +556,47 @@ async function restoreContainer(containerId) {
       NetworkingConfig: containerInfo.NetworkSettings.Networks
     };
 
+    // 先恢复文件映射
+    if (fs.existsSync(bindFsPath)) {
+      console.log(chalk.blue('正在恢复文件映射...'));
+      const bindFiles = await fs.readdir(bindFsPath);
+      for (const bindFile of bindFiles) {
+        if (bindFile.endsWith('.metadata.json')) {
+          const baseName = bindFile.replace('.metadata.json', '');
+          const metadata = await fs.readJson(path.join(bindFsPath, bindFile));
+          const bindTargetPath = metadata.hostPath;
+
+          // 确保目标目录存在
+          await fs.ensureDir(path.dirname(bindTargetPath));
+
+          if (metadata.isFile) {
+            // 如果是文件，直接复制
+            await fs.copy(
+              path.join(bindFsPath, baseName),
+              bindTargetPath
+            );
+            // 恢复文件属性
+            await fs.chmod(bindTargetPath, metadata.mode);
+            await fs.chown(bindTargetPath, metadata.uid, metadata.gid);
+            await fs.utimes(bindTargetPath, new Date(metadata.mtime), new Date(metadata.mtime));
+            console.log(chalk.blue(`已恢复文件映射: ${bindTargetPath}`));
+          } else if (metadata.isDirectory) {
+            // 如果是目录，从 tar 文件恢复
+            await tar.extract({
+              file: path.join(bindFsPath, `${baseName}.tar`),
+              cwd: path.dirname(bindTargetPath),
+              preservePaths: true,
+              preserveOwner: true,
+              preserveMode: true,
+              preserveTimestamps: true,
+              strict: true
+            });
+            console.log(chalk.blue(`已恢复目录映射: ${bindTargetPath}`));
+          }
+        }
+      }
+    }
+
     // 创建新容器
     console.log(chalk.blue('正在创建容器...'));
     const container = await docker.createContainer(containerConfig);
@@ -514,34 +608,6 @@ async function restoreContainer(containerId) {
       path: '/'
     });
 
-    // 恢复文件映射
-    if (fs.existsSync(bindFsPath)) {
-      console.log(chalk.blue('正在恢复文件映射...'));
-      const bindFiles = await fs.readdir(bindFsPath);
-      for (const bindFile of bindFiles) {
-        if (bindFile.endsWith('.tar')) {
-          const bindSourcePath = path.join(bindFsPath, bindFile);
-          const bindTargetPath = containerInfo.HostConfig.Binds
-            .find(bind => bind.split(':')[0].endsWith(bindFile.replace('.tar', '')))
-            ?.split(':')[0];
-
-          if (bindTargetPath) {
-            // 从 tar 文件恢复，保持所有属性
-            await tar.extract({
-              file: bindSourcePath,
-              cwd: path.dirname(bindTargetPath),
-              preservePaths: true,
-              preserveOwner: true,
-              preserveMode: true,
-              preserveTimestamps: true,
-              strict: true
-            });
-            console.log(chalk.blue(`已恢复文件映射: ${bindSourcePath} -> ${bindTargetPath}`));
-          }
-        }
-      }
-    }
-
     // 启动容器
     console.log(chalk.blue('正在启动容器...'));
     await container.start();
@@ -549,7 +615,6 @@ async function restoreContainer(containerId) {
     console.log(chalk.green(`容器 ${containerInfo.Name} 已成功恢复并启动`));
   } catch (error) {
     console.error(chalk.red(`恢复失败: ${error.message}`));
-    throw error;
   }
 }
 

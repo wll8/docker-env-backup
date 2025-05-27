@@ -5,6 +5,10 @@ const path = require('path');
 const PORT = 9090;
 const BASE_DIR = './file';
 const LOG = `./log/req.txt`
+if(fs.existsSync(LOG) && fs.statSync(LOG).isDirectory()) {
+  console.error(`请挂载文件`)
+  process.exit()
+}
 
 // 递归创建目录
 function ensureDirSync(dirPath) {
