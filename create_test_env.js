@@ -21,9 +21,28 @@ async function cleanupTestEnvironment() {
       const name = containerInfo.Names[0].replace('/', '');
       if (name === 'test_web' || name === 'test_web2') {
         const container = docker.getContainer(containerInfo.Id);
-        await container.stop();
-        await container.remove();
-        console.log(chalk.green(`容器 ${name} 已删除`));
+        try {
+          // 尝试停止容器
+          try {
+            await container.stop();
+          } catch (error) {
+            if (error.statusCode !== 304) { // 忽略容器已停止的错误
+              throw error;
+            }
+          }
+
+          // 强制删除容器
+          try {
+            await container.remove({ force: true });
+            console.log(chalk.green(`容器 ${name} 已删除`));
+          } catch (error) {
+            if (error.statusCode !== 404) { // 忽略容器不存在的错误
+              throw error;
+            }
+          }
+        } catch (error) {
+          console.error(chalk.red(`删除容器 ${name} 失败: ${error.message}`));
+        }
       }
     }
 
@@ -33,8 +52,12 @@ async function cleanupTestEnvironment() {
     for (const imageInfo of images) {
       const tags = imageInfo.RepoTags || [];
       if (tags.some(tag => tag.includes('test_docker_env_test-web'))) {
-        await docker.getImage(imageInfo.Id).remove({ force: true });
-        console.log(chalk.green(`镜像 ${tags[0]} 已删除`));
+        try {
+          await docker.getImage(imageInfo.Id).remove({ force: true });
+          console.log(chalk.green(`镜像 ${tags[0]} 已删除`));
+        } catch (error) {
+          console.log(chalk.yellow(`删除镜像 ${tags[0]} 失败: ${error.message}`));
+        }
       }
     }
 
