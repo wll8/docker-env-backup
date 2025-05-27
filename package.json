@@ -1,0 +1,24 @@
+{
+  "name": "docker-back",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "npx shx rm -rf backups && npm run del && npm run gen && npm run back && npm run del && npm run get",
+    "gen": "node create_test_env.js",
+    "del": "node cleanup_docker",
+    "get": "node docker_backup.js restore",
+    "back": "node docker_backup.js backup",
+    "list": "node docker_backup.js list"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "Docker container backup and restore utility with cross-OS support",
+  "dependencies": {
+    "dockerode": "^3.3.5",
+    "commander": "^11.0.0",
+    "chalk": "^4.1.2",
+    "fs-extra": "^11.1.1",
+    "tar": "^6.1.15"
+  }
+}
