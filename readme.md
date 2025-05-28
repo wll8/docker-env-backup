@@ -30,49 +30,7 @@
   - 保持文件权限和属性
   - 自动处理冲突
 
-## 实现方式一：Shell 脚本
-
-### 环境要求
-
-1. Bash 4.0 或更高版本
-2. Docker 已安装并运行
-3. root 权限
-
-### 使用方法
-
-1. 添加执行权限：
-```bash
-chmod +x backup_docker.sh
-```
-
-2. 运行脚本：
-```bash
-sudo ./backup_docker.sh
-```
-
-### Shell 脚本特性
-
-- 交互式菜单界面
-- 自动检查 Docker 服务状态
-- 自动检查磁盘空间
-- 支持选择性备份：
-  - 备份特定 Docker 镜像
-  - 备份容器配置
-  - 备份 Docker 卷
-  - 备份网络配置
-  - 备份 Docker 配置文件
-- 完整性验证：
-  - 自动生成 SHA256 校验和
-  - 备份后验证文件完整性
-  - 记录备份时间戳
-  - 保存 Docker 环境信息
-- 安全特性：
-  - 备份前检查权限
-  - 备份前检查磁盘空间
-  - 支持交互式确认
-  - 自动处理容器状态
-
-## 实现方式二：Node.js 程序
+## 实现方式一：Node.js 程序
 
 ### 环境要求
 
@@ -118,6 +76,49 @@ node docker_backup.js backup-image <imageName>
 ```bash
 node docker_backup.js backup-image nginx:latest
 ```
+
+
+## 实现方式二：Shell 脚本
+
+### 环境要求
+
+1. Bash 4.0 或更高版本
+2. Docker 已安装并运行
+3. root 权限
+
+### 使用方法
+
+1. 添加执行权限：
+```bash
+chmod +x backup_docker.sh
+```
+
+2. 运行脚本：
+```bash
+sudo ./backup_docker.sh
+```
+
+### Shell 脚本特性
+
+- 交互式菜单界面
+- 自动检查 Docker 服务状态
+- 自动检查磁盘空间
+- 支持选择性备份：
+  - 备份特定 Docker 镜像
+  - 备份容器配置
+  - 备份 Docker 卷
+  - 备份网络配置
+  - 备份 Docker 配置文件
+- 完整性验证：
+  - 自动生成 SHA256 校验和
+  - 备份后验证文件完整性
+  - 记录备份时间戳
+  - 保存 Docker 环境信息
+- 安全特性：
+  - 备份前检查权限
+  - 备份前检查磁盘空间
+  - 支持交互式确认
+  - 自动处理容器状态
 
 ## 备份内容说明
 
