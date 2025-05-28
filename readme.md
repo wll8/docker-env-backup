@@ -1,11 +1,15 @@
 # Docker 环境备份和恢复工具
 
-这是一个用于备份和恢复 Docker 环境的工具，提供两种实现方式：Shell 脚本和 Node.js 程序。您可以根据需求选择使用其中任一方式。
+这是一个用于备份和恢复 Docker 环境的工具（在 ubuntu 20 中测试过），提供两种实现方式：Shell 脚本和 Node.js 程序。您可以根据需求选择使用其中任一方式。
 
-- 无停机备份
-- 在 ubuntu 20 中测试过
+
+![alt text](img/image.png)
+
+![alt text](img/image-1.png)
 
 ## 功能特点
+
+- 无停机备份
 
 - 完整备份 Docker 环境
   - 备份所有 Docker 镜像
