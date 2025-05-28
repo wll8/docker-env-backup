@@ -1,6 +1,9 @@
 # Docker 环境备份和恢复工具
 
-这是一个用于备份和恢复 Docker 环境的命令行工具。它可以备份 Docker 镜像、容器、网络、卷和文件映射，并在需要时进行恢复。
+这是一个用于备份和恢复 Docker 环境的工具，提供两种实现方式：Shell 脚本和 Node.js 程序。您可以根据需求选择使用其中任一方式。
+
+- 无停机备份
+- 在 ubuntu 20 中测试过
 
 ## 功能特点
 
@@ -27,93 +30,85 @@
   - 保持文件权限和属性
   - 自动处理冲突
 
-## 安装
+## 实现方式一：Shell 脚本
 
 ### 环境要求
 
-1. 安装 NVM（Node Version Manager）
+1. Bash 4.0 或更高版本
+2. Docker 已安装并运行
+3. root 权限
+
+### 使用方法
+
+1. 添加执行权限：
 ```bash
-# 设置 NVM 镜像（如果遇到下载问题）
-export NVM_NODEJS_ORG_MIRROR=https://npmmirror.com/mirrors/node/
-export NVM_IOJS_ORG_MIRROR=https://npmmirror.com/mirrors/iojs/
-
-# 安装 NVM
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
-
-# 配置 NVM 环境变量
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # 加载 nvm
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # 加载 nvm bash_completion
-
-# 验证安装
-nvm --version
+chmod +x backup_docker.sh
 ```
 
-2. 使用 NVM 安装 Node.js
+2. 运行脚本：
 ```bash
-# 安装最新的 LTS 版本
-nvm install --lts
-
-# 使用已安装的版本
-nvm use --lts
-
-# 验证 Node.js 安装
-node --version
-npm --version
+sudo ./backup_docker.sh
 ```
 
-### 故障排除
+### Shell 脚本特性
 
-如果遇到 SSL 连接问题，可以尝试以下解决方案：
+- 交互式菜单界面
+- 自动检查 Docker 服务状态
+- 自动检查磁盘空间
+- 支持选择性备份：
+  - 备份特定 Docker 镜像
+  - 备份容器配置
+  - 备份 Docker 卷
+  - 备份网络配置
+  - 备份 Docker 配置文件
+- 完整性验证：
+  - 自动生成 SHA256 校验和
+  - 备份后验证文件完整性
+  - 记录备份时间戳
+  - 保存 Docker 环境信息
+- 安全特性：
+  - 备份前检查权限
+  - 备份前检查磁盘空间
+  - 支持交互式确认
+  - 自动处理容器状态
 
-1. 使用国内镜像源：
-```bash
-export NVM_NODEJS_ORG_MIRROR=https://npmmirror.com/mirrors/node/
-export NVM_IOJS_ORG_MIRROR=https://npmmirror.com/mirrors/iojs/
-```
+## 实现方式二：Node.js 程序
 
-2. 更新 SSL 证书：
-```bash
-apt-get update
-apt-get install -y ca-certificates
-update-ca-certificates
-```
+### 环境要求
 
-3. 使用 NodeSource 仓库：
-```bash
-curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
-apt-get install -y nodejs
-```
+1. Node.js 18.x 或更高版本
+2. Docker 已安装并运行
 
-3. 安装项目依赖
+### 安装
+
 ```bash
 npm install
 ```
 
-## 使用方法
+### 使用方法
 
-### 完整备份
+#### 完整备份
 
 备份整个 Docker 环境：
 ```bash
 node docker_backup.js backup
 ```
 
-### 恢复环境
+#### 恢复环境
 
 从备份恢复整个 Docker 环境：
 ```bash
 node docker_backup.js restore
 ```
 
-### 查看备份内容
+#### 查看备份内容
 
 列出当前备份的内容：
 ```bash
 node docker_backup.js list
 ```
 
-### 备份特定镜像
+#### 备份特定镜像
 
 备份特定镜像及其相关容器：
 ```bash
@@ -170,6 +165,12 @@ node docker_backup.js backup-image nginx:latest
 
 ## 依赖项
 
+### Shell 脚本依赖
+- bash
+- docker
+- coreutils
+
+### Node.js 程序依赖
 - dockerode: Docker API 客户端
 - fs-extra: 文件系统操作
 - tar: 文件打包
