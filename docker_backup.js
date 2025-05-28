@@ -7,6 +7,9 @@ const tar = require('tar');
 const { program } = require('commander');
 const chalk = require('chalk');
 const crypto = require('crypto');
+const yaml = require('js-yaml');
+const dotenv = require('dotenv');
+const { execSync } = require('child_process');
 
 const docker = new Docker();
 
@@ -946,6 +949,161 @@ async function backupImageAndContainers(imageName) {
   }
 }
 
+// 解析 docker-compose 文件
+async function parseComposeFile(composePath) {
+  try {
+    const composeDir = path.dirname(composePath);
+    const envPath = path.join(composeDir, '.env');
+    
+    // 如果存在 .env 文件，加载环境变量
+    if (fs.existsSync(envPath)) {
+      const envConfig = dotenv.parse(fs.readFileSync(envPath));
+      process.env = { ...process.env, ...envConfig };
+    }
+
+    // 读取 docker-compose.yml 文件
+    const composeContent = fs.readFileSync(composePath, 'utf8');
+    
+    // 替换环境变量
+    const processedContent = composeContent.replace(/\${([^}]+)}/g, (match, envVar) => {
+      return process.env[envVar] || match;
+    });
+
+    // 解析 YAML
+    return yaml.load(processedContent);
+  } catch (error) {
+    console.error(chalk.red(`解析 docker-compose 文件失败: ${error.message}`));
+    throw error;
+  }
+}
+
+// 备份 docker-compose 项目
+async function backupComposeProject(composePath) {
+  try {
+    console.log(chalk.blue('开始备份 docker-compose 项目...'));
+
+    // 解析 docker-compose 文件
+    const composeConfig = await parseComposeFile(composePath);
+    const projectDir = path.dirname(composePath);
+    const projectName = path.basename(projectDir);
+
+    // 创建项目备份目录
+    const projectBackupDir = path.join(BACKUP_DIR, 'compose', projectName);
+    fs.ensureDirSync(projectBackupDir);
+
+    // 备份 docker-compose.yml 和 .env 文件
+    await fs.copy(composePath, path.join(projectBackupDir, 'docker-compose.yml'));
+    const envPath = path.join(projectDir, '.env');
+    if (fs.existsSync(envPath)) {
+      await fs.copy(envPath, path.join(projectBackupDir, '.env'));
+    }
+
+    // 备份所有服务
+    const services = composeConfig.services || {};
+    for (const [serviceName, service] of Object.entries(services)) {
+      console.log(chalk.blue(`正在备份服务: ${serviceName}`));
+
+      // 备份镜像
+      if (service.image) {
+        const image = await findImageByName(service.image);
+        if (image) {
+          await backupImages([image]);
+        }
+      }
+
+      // 备份卷
+      if (service.volumes) {
+        for (const volume of service.volumes) {
+          if (typeof volume === 'string' && volume.includes(':')) {
+            const [hostPath, containerPath] = volume.split(':');
+            if (hostPath.startsWith('/')) {
+              // 如果是绝对路径，备份文件映射
+              const bindFsPath = path.join(projectBackupDir, 'binds', serviceName);
+              fs.ensureDirSync(bindFsPath);
+              await fs.copy(hostPath, path.join(bindFsPath, path.basename(hostPath)));
+            }
+          }
+        }
+      }
+    }
+
+    // 备份网络
+    if (composeConfig.networks) {
+      const networks = await docker.listNetworks();
+      const projectNetworks = networks.filter(network => 
+        network.Name.startsWith(`${projectName}_`)
+      );
+      await backupNetworks(projectNetworks);
+    }
+
+    console.log(chalk.green(`docker-compose 项目 ${projectName} 备份完成`));
+  } catch (error) {
+    console.error(chalk.red(`备份 docker-compose 项目失败: ${error.message}`));
+    throw error;
+  }
+}
+
+// 恢复 docker-compose 项目
+async function restoreComposeProject(projectName) {
+  try {
+    console.log(chalk.blue(`开始恢复 docker-compose 项目: ${projectName}`));
+
+    const projectBackupDir = path.join(BACKUP_DIR, 'compose', projectName);
+    if (!fs.existsSync(projectBackupDir)) {
+      throw new Error(`项目 ${projectName} 的备份不存在`);
+    }
+
+    // 恢复 docker-compose.yml 和 .env 文件
+    const composePath = path.join(projectBackupDir, 'docker-compose.yml');
+    const envPath = path.join(projectBackupDir, '.env');
+    
+    if (!fs.existsSync(composePath)) {
+      throw new Error(`找不到 docker-compose.yml 文件`);
+    }
+
+    // 解析 docker-compose 文件
+    const composeConfig = await parseComposeFile(composePath);
+
+    // 恢复所有服务
+    const services = composeConfig.services || {};
+    for (const [serviceName, service] of Object.entries(services)) {
+      console.log(chalk.blue(`正在恢复服务: ${serviceName}`));
+
+      // 恢复镜像
+      if (service.image) {
+        await restoreImages();
+      }
+
+      // 恢复卷
+      if (service.volumes) {
+        for (const volume of service.volumes) {
+          if (typeof volume === 'string' && volume.includes(':')) {
+            const [hostPath, containerPath] = volume.split(':');
+            if (hostPath.startsWith('/')) {
+              // 如果是绝对路径，恢复文件映射
+              const bindBackupPath = path.join(projectBackupDir, 'binds', serviceName, path.basename(hostPath));
+              if (fs.existsSync(bindBackupPath)) {
+                await fs.ensureDir(path.dirname(hostPath));
+                await fs.copy(bindBackupPath, hostPath);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 恢复网络
+    if (composeConfig.networks) {
+      await restoreNetworks();
+    }
+
+    console.log(chalk.green(`docker-compose 项目 ${projectName} 恢复完成`));
+  } catch (error) {
+    console.error(chalk.red(`恢复 docker-compose 项目失败: ${error.message}`));
+    throw error;
+  }
+}
+
 // 命令行接口
 program
   .version('1.0.0')
@@ -970,5 +1128,15 @@ program
   .command('backup-image <imageName>')
   .description('备份特定镜像及其相关容器（支持镜像名称或标签，例如：nginx:latest）')
   .action(backupImageAndContainers);
+
+program
+  .command('backup-compose <composePath>')
+  .description('备份 docker-compose 项目')
+  .action(backupComposeProject);
+
+program
+  .command('restore-compose <projectName>')
+  .description('恢复 docker-compose 项目')
+  .action(restoreComposeProject);
 
 program.parse(process.argv);
