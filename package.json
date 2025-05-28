@@ -1,6 +1,7 @@
 {
-  "name": "docker-back",
+  "name": "docker-env-backup",
   "version": "1.0.0",
+  "description": "A powerful Docker environment backup and restore utility with cross-OS support",
   "main": "index.js",
   "scripts": {
     "test": "npx shx rm -rf backups && npm run del && npm run gen && npm run back && npm run del && npm run get",
@@ -8,17 +9,42 @@
     "del": "node cleanup_docker",
     "get": "node docker_backup.js restore",
     "back": "node docker_backup.js backup",
-    "list": "node docker_backup.js list"
+    "list": "node docker_backup.js list",
+    "lint": "eslint .",
+    "format": "prettier --write \"**/*.{js,json,md}\""
   },
-  "keywords": [],
+  "keywords": [
+    "docker",
+    "backup",
+    "restore",
+    "container",
+    "devops",
+    "utility",
+    "cli"
+  ],
   "author": "",
-  "license": "ISC",
-  "description": "Docker container backup and restore utility with cross-OS support",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wll8/docker-env-backup.git"
+  },
+  "bugs": {
+    "url": "https://github.com/wll8/docker-env-backup/issues"
+  },
+  "homepage": "https://github.com/wll8/docker-env-backup#readme",
   "dependencies": {
     "dockerode": "^3.3.5",
     "commander": "^11.0.0",
     "chalk": "^4.1.2",
     "fs-extra": "^11.1.1",
     "tar": "^6.1.15"
+  },
+  "devDependencies": {
+    "eslint": "^8.0.0",
+    "prettier": "^3.0.0",
+    "shx": "^0.3.4"
   }
 }
